@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LabLookup</title>
+<style>
+:root{--bg:#eef3f5;--card:#fff;--ink:#14262e;--mute:#5b6f78;--line:#cfdbe0;--acc:#1b6b7a;--hot:#c93c27}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1b20;--card:#172830;--ink:#e6f0f3;--mute:#8fa6af;--line:#274049;--acc:#4fb3c4;--hot:#ff7a5f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Trebuchet MS","Segoe UI",system-ui,sans-serif;padding:20px 14px;display:flex;justify-content:center}
+main{width:100%;max-width:780px}
+header{background:var(--acc);color:#fff;border-radius:16px;padding:18px 20px;margin-bottom:14px}
+h1{margin:0;font-size:1.9rem;letter-spacing:-.02em}header p{margin:.2rem 0 0}
+h2{font-size:1.05rem;margin:16px 0 6px}
+button,select{font:inherit;cursor:pointer}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+select,#q{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit}
+#mic{flex:none;min-width:140px;padding:14px 18px;border:0;border-radius:999px;background:var(--acc);color:#fff;font-weight:700}
+#mic.on{background:var(--hot);animation:p 1.6s ease-out infinite}
+@keyframes p{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--hot) 55%,transparent)}100%{box-shadow:0 0 0 22px transparent}}
+@media(prefers-reduced-motion:reduce){#mic.on{animation:none}}
+#status{margin:0;color:var(--mute)}
+#f{display:flex;gap:8px;flex-wrap:wrap}#q{flex:1;min-width:200px}
+#f button,.nav button,li.r button,#copy{padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+.opt{display:block;margin:8px 0;color:var(--mute);font-size:.92rem}
+ul,ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+li.r{padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card);cursor:pointer}
+li.r b{color:var(--acc)}li.r button{margin-top:8px;background:var(--acc);color:#fff;border:0;font-weight:700}
+mark{background:color-mix(in srgb,var(--hot) 30%,transparent);color:inherit;border-radius:3px}
+.warn{color:var(--hot);font-weight:700}
+#ref,#view{margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+pre{white-space:pre-wrap;margin:6px 0;font:inherit}
+.nav{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+canvas{display:block;width:100%;height:auto;border-radius:8px;background:#fff}
+#hb li{color:var(--mute);font-size:.92rem}
+:focus-visible{outline:3px solid var(--hot);outline-offset:2px}
+.note{color:var(--mute);font-size:.88rem}
+</style>
+</head>
+<body>
+<main>
+<header><h1 id="title">LabLookup</h1><p>Say a lab test name. If your hospital doesn’t offer it, choose which hospital to refer it to.</p></header>
+
+<div class="row"><label for="home"><strong>I work at</strong></label><select id="home"></select></div>
+<div class="row"><button id="mic">Start hands-free</button><p id="status">Press Start, allow the microphone, then say a test name.</p></div>
+<form id="f"><input id="q" type="search" placeholder="Type or say a test name" autocomplete="off" aria-label="Test name"><button>Search</button></form>
+<label class="opt"><input type="checkbox" id="auto" checked> Read the answer aloud</label>
+
+<div id="res" aria-live="polite"></div>
+<section id="ref" hidden>
+  <strong>Referral note</strong><pre id="refText"></pre>
+  <button id="copy" type="button">Copy note</button> <a id="mail" hidden>Email it</a>
+</section>
+<section id="view" hidden>
+  <div class="nav"><button id="pv" type="button">‹ Prev</button><strong id="pg"></strong><button id="nx" type="button">Next ›</button></div>
+  <canvas id="cv" aria-label="The handbook page"></canvas>
+</section>
+
+<h2>Handbooks</h2>
+<ul id="hb"></ul>
+<p class="note">Voice commands: “refer to” and a hospital name, “I work at” and a hospital name, “read it”, “stop”, “next page”, “previous page”. Works in Chrome and Edge. Your browser’s speech service hears you, so say test names only, never patient details. This app prepares a referral note only; it does not place an order. Confirm requirements with the receiving laboratory.</p>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+const APP = "LabLookup";                       // change the app name here
+// One line per hospital. "file" = that hospital's handbook PDF, uploaded to this website.
+// Optional: email = where the referral note can be sent; say = other names people may say.
+const HOSPITALS = [
+  {id: "A", name: "Hospital A", file: "handbooks/hospital-a.pdf", email: "", say: []},
+  {id: "B", name: "Hospital B", file: "handbooks/hospital-b.pdf", email: "", say: []},
+  {id: "C", name: "Hospital C", file: "handbooks/hospital-c.pdf", email: "", say: []}
+];
+const $ = s => document.querySelector(s);
+document.title = APP; $("#title").textContent = APP;
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const PHONE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);   // phones: tap to talk
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const H = {}; HOSPITALS.forEach(c => H[c.id] = {...c, X: null, pdf: null, note: "loading…"});
+const get = k => { try { return localStorage.getItem(k) || ""; } catch (_) { return ""; } };
+let home = H[get("lablookup-home")] ? get("lablookup-home") : HOSPITALS[0].id;
+let rec, on = false, muted = false, task = null, shownKey = "", cur = null, last = null, lastMsg = "";
+
+/*S*/
+const STOP = new Set("a an the of for and or to in on is are what whats how please search find look up lookup tell me about test tests lab".split(" "));
+const NUM = {zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12};
+const raw = t => t.toLowerCase().replace(/(\d),(\d)/g, "$1$2").match(/[a-z0-9]+/g) || [];
+const stem = w => w.length > 4 ? w.replace(/s$/, "") : w;
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function lev(a, b) {
+  const d = Array.from({length: a.length + 1}, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+
+function terms(q) {                          // spoken "a one c" becomes the single term "a1c"
+  const r = raw(q), keep = [], runs = []; let run = [];
+  const flush = () => {
+    if (run.length > 1) runs.push(run.map(x => x.v).join(""));
+    else if (run.length === 1 && !STOP.has(run[0].w)) keep.push(stem(run[0].w));
+    run = [];
+  };
+  for (const w of r) {
+    const v = Object.hasOwn(NUM, w) ? String(NUM[w]) : w;
+    if (v.length <= 2 && (w === "a" || !STOP.has(w))) run.push({w, v});
+    else { flush(); if (!STOP.has(w)) keep.push(stem(w)); }
+  }
+  flush();
+  return [...new Set([...keep, ...runs])];
+}
+
+function chunk(text, pg) {                   // passages of about 60 words
+  const w = text.replace(/\s+/g, " ").trim().split(" ").filter(Boolean), out = [];
+  for (let i = 0; i < w.length;) {
+    let e = Math.min(i + 60, w.length);
+    if (e < w.length) for (let j = e - 1; j > i + 35; j--) if (/[.!?:]$/.test(w[j])) { e = j + 1; break; }
+    out.push({pg, text: w.slice(i, e).join(" ")});
+    i = e;
+  }
+  return out;
+}
+
+function build(ps) {                         // one search index per hospital handbook
+  const X = {P: ps, DF: Object.create(null), VOC: []};
+  ps.forEach(p => {
+    const t = raw(p.text).map(stem);
+    p.tf = Object.create(null);
+    t.forEach(w => p.tf[w] = (p.tf[w] || 0) + 1);
+    p.head = new Set(t.slice(0, 12));        // a test name is usually at the start of its entry
+    Object.keys(p.tf).forEach(w => X.DF[w] = (X.DF[w] || 0) + 1);
+  });
+  X.VOC = Object.keys(X.DF);
+  return X;
+}
+
+function close(w, X) {                       // handbook words that spell almost like w
+  const lim = w.length >= 9 ? 2 : w.length >= 5 ? 1 : 0;
+  if (!lim) return [];
+  return X.VOC.filter(v => Math.abs(v.length - w.length) <= lim && lev(v, w) <= lim)
+    .sort((a, b) => X.DF[b] - X.DF[a]).slice(0, 2);
+}
+
+function search(q, X) {
+  const ts = terms(q), used = [];
+  if (!ts.length || !X) return {hits: [], ts: [], top: 0};
+  ts.forEach(t => X.DF[t] ? used.push([t, 1, t]) : close(t, X).forEach(c => used.push([c, .7, t])));
+  const res = X.P.map(p => {
+    let s = 0; const got = new Set();
+    used.forEach(([t, wt, orig]) => {
+      if (p.tf[t]) { got.add(orig); s += wt * (1 + Math.log(p.tf[t])) * Math.log(1 + X.P.length / X.DF[t]) * (p.head.has(t) ? 1.3 : 1); }
+    });
+    return {p, s: s * got.size / ts.length, got: got.size};
+  }).filter(r => r.got >= Math.ceil(ts.length / 2)).sort((a, b) => b.s - a.s).slice(0, 3);
+  return {hits: res.map(r => r.p), ts: used.map(u => u[0]), top: res[0] ? res[0].s : 0};
+}
+
+function matchHospital(text, list) {         // "refer to hospital b" or a name from the list
+  const n = raw(text).join(" ");
+  return list.find(c => [c.name, ...(c.say || [])].some(s => n.includes(raw(s).join(" "))) ||
+    new RegExp("(?:^| )(?:hospital )?" + c.id.toLowerCase() + "$").test(n));
+}
+/*E*/
+
+function speak(t) {
+  if (!("speechSynthesis" in window)) return;
+  speechSynthesis.cancel(); muted = true;
+  const u = new SpeechSynthesisUtterance(t); u.lang = "en-US";
+  u.onend = u.onerror = () => setTimeout(() => muted = false, 500);
+  setTimeout(() => muted = false, 2500 + t.length * 90);          // safety net
+  speechSynthesis.speak(u);
+}
+const stopTalk = () => { speechSynthesis.cancel(); muted = false; };
+const brief = (t, n = 260) => t.length <= n ? t : t.slice(0, t.lastIndexOf(" ", n)) + "…";
+
+async function view(h, n) {
+  if (!h || !h.X) return;
+  const total = h.pdf ? h.pdf.numPages : Math.max(...h.X.P.map(p => p.pg));
+  const pgNo = Math.min(Math.max(1, n), total); cur = {h, n: pgNo};
+  $("#view").hidden = false; $("#pg").textContent = h.name + " · page " + pgNo + " of " + total;
+  $("#cv").hidden = !h.pdf;
+  const key = h.id + ":" + pgNo;
+  if (!h.pdf || shownKey === key) return;
+  try {
+    const o = await h.pdf.getPage(pgNo);
+    if (!cur || cur.h !== h || cur.n !== pgNo) return;
+    const base = o.getViewport({scale: 1});
+    const vp = o.getViewport({scale: ($("#view").clientWidth || 600) / base.width * (devicePixelRatio || 1)});
+    if (task) { try { task.cancel(); } catch (_) {} }
+    $("#cv").width = vp.width; $("#cv").height = vp.height;
+    task = o.render({canvasContext: $("#cv").getContext("2d"), viewport: vp});
+    await task.promise; shownKey = key;
+  } catch (_) {}
+}
+
+function card(h, p, ts, btn) {
+  const li = document.createElement("li"), b = document.createElement("b");
+  li.className = "r"; li.tabIndex = 0; b.textContent = h.name + " · page " + p.pg + "  "; li.append(b);
+  const re = new RegExp("\\b(" + ts.map(esc).join("|") + ")", "gi");
+  p.text.split(re).forEach((s, k) => { if (k % 2) { const m = document.createElement("mark"); m.textContent = s; li.append(m); } else li.append(s); });
+  li.onclick = () => view(h, p.pg);
+  if (btn) {
+    const x = document.createElement("button"); x.textContent = btn.label;
+    x.onclick = e => { e.stopPropagation(); btn.fn(); };
+    li.append(document.createElement("br"), x);
+  }
+  return li;
+}
+function section(title, cls) {
+  const d = document.createElement("div"), h = document.createElement("h2"), ol = document.createElement("ol");
+  h.textContent = title; if (cls) h.className = cls; d.append(h, ol); $("#res").append(d); return ol;
+}
+
+function run(q) {
+  stopTalk(); $("#res").replaceChildren(); $("#ref").hidden = true;
+  const mine = H[home], r0 = search(q, mine.X);
+  const others = HOSPITALS.filter(c => c.id !== home && H[c.id].X)
+    .map(c => ({h: H[c.id], r: search(q, H[c.id].X)})).filter(o => o.r.hits.length);
+  last = {q, others};
+  if (r0.hits.length) {
+    const ol = section("Available at " + mine.name);
+    r0.hits.forEach(p => ol.append(card(mine, p, r0.ts)));
+    view(mine, r0.hits[0].pg);
+  }
+  if (others.length) {
+    const ol = section(r0.hits.length ? "Also listed at" : "Not found at " + mine.name + ". Refer to:", r0.hits.length ? "" : "warn");
+    others.forEach(o => ol.append(card(o.h, o.r.hits[0], o.r.ts, {label: "Refer here", fn: () => refer(o.h)})));
+    if (!r0.hits.length) view(others[0].h, others[0].r.hits[0].pg);
+  }
+  if (r0.hits.length) lastMsg = "At " + mine.name + ", page " + r0.hits[0].pg + ". " + brief(r0.hits[0].text);
+  else if (others.length) lastMsg = q + " is not in " + mine.name + "'s handbook. It is listed at " + others.map(o => o.h.name + ", page " + o.r.hits[0].pg).join(", and ") + ". Say refer to, then the hospital name.";
+  else { lastMsg = "I couldn't find " + q + " in any handbook. Say it again, or type it."; $("#res").textContent = lastMsg; }
+  if ($("#auto").checked) speak(lastMsg);
+}
+
+function refer(h) {
+  const o = last.others.find(x => x.h === h);
+  const note = "Referral request (" + new Date().toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"}) + ")\n" +
+    "Test: " + last.q + "\nFrom: " + H[home].name + "\nTo: " + h.name + "\n" +
+    "Listed in the " + h.name + " handbook, page " + (o ? o.r.hits[0].pg : "?") + ".\nNo patient details are included in this note.";
+  $("#ref").hidden = false; $("#refText").textContent = note;
+  const a = $("#mail"); a.hidden = !h.email;
+  if (h.email) a.href = "mailto:" + h.email + "?subject=" + encodeURIComponent("Test referral: " + last.q) + "&body=" + encodeURIComponent(note);
+  $("#ref").scrollIntoView({block: "nearest"});
+  speak("Referral note ready for " + h.name + ".");
+}
+
+function heard(alts) {                       // alts = the browser's best guesses
+  const cmd = raw(alts[0]).join(" "), t = alts[0].replace(/[.?!]+$/, "");
+  if (/^(stop|be quiet)$/.test(cmd)) return stopTalk();
+  if (/^(read|read it|read that)$/.test(cmd)) return lastMsg && speak(lastMsg);
+  if (cmd === "next page") return cur && view(cur.h, cur.n + 1);
+  if (cmd === "previous page") return cur && view(cur.h, cur.n - 1);
+  let m = cmd.match(/^(?:i work at|my hospital is|home hospital is|set hospital to) (.+)$/);
+  if (m) {
+    const c = matchHospital(m[1], HOSPITALS);
+    if (!c) return speak("I don't know that hospital.");
+    home = c.id; $("#home").value = home; try { localStorage.setItem("lablookup-home", home); } catch (_) {}
+    return speak("Your hospital is " + c.name + ".");
+  }
+  m = cmd.match(/^(?:refer|send|referral)(?: it| this| the test)?(?: to)?(?: (.+))?$/);
+  if (m && last && last.others.length) {
+    const c = m[1] ? matchHospital(m[1], last.others.map(o => o.h)) : last.others.length === 1 ? last.others[0].h : null;
+    return c ? refer(c) : speak("Which hospital? Say refer to, then the name.");
+  }
+  const clean = s => s.replace(/^(?:please )?(?:search for|search|find|look up|lookup|show me|what is|what's|tell me about)\s+/i, "");
+  const score = a => Math.max(...HOSPITALS.map(c => search(clean(a), H[c.id].X).top));
+  const best = alts.map(a => clean(a.replace(/[.?!]+$/, ""))).sort((x, y) => score(y) - score(x))[0];   // the guess that fits the handbooks best
+  $("#q").value = best; run(best);
+}
+
+function start() {
+  if (!window.isSecureContext) { $("#status").textContent = "The microphone needs a secure page (https://)."; return; }
+  rec = new SR(); rec.lang = "en-US"; rec.continuous = !PHONE; rec.interimResults = true; rec.maxAlternatives = 3;
+  rec.onresult = e => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (!r.isFinal) { if (!muted) $("#status").textContent = "Hearing: " + r[0].transcript; continue; }
+      $("#status").textContent = PHONE ? "Listening. Speak now." : "Listening. Say a test name.";
+      if (!muted) heard(Array.from(r, a => a.transcript));
+    }
+  };
+  rec.onend = () => { if (on && !PHONE) { try { rec.start(); } catch (_) {} } else if (on) stop(); };
+  rec.onerror = e => {
+    const blocked = "The microphone is blocked. Allow it in the address bar, then press Start.";
+    const msg = {"not-allowed": blocked, "service-not-allowed": blocked, "audio-capture": "No microphone was found.", "network": "The speech service can't be reached. Check your internet connection."}[e.error];
+    if (msg) { stop(); $("#status").textContent = msg; }
+  };
+  rec.start(); on = true;
+  $("#mic").classList.add("on"); $("#mic").textContent = "Stop";
+  $("#status").textContent = PHONE ? "Listening. Speak now." : "Listening. Say a test name.";
+}
+function stop() {
+  on = false; try { rec && rec.stop(); } catch (_) {}
+  $("#mic").classList.remove("on"); $("#mic").textContent = PHONE ? "Tap to talk" : "Start hands-free";
+  $("#status").textContent = PHONE ? "Tap to talk again." : "Stopped. Press Start to listen again.";
+}
+
+async function loadH(h, buf) {
+  h.pdf = await pdfjsLib.getDocument({data: buf}).promise; shownKey = "";
+  const ps = [];
+  for (let n = 1; n <= h.pdf.numPages; n++) {
+    const tc = await (await h.pdf.getPage(n)).getTextContent();
+    ps.push(...chunk(tc.items.map(i => i.str).join(" "), n));
+  }
+  if (!ps.length) { h.pdf = null; throw new Error("no readable text; a scanned PDF can't be searched"); }
+  h.X = build(ps);
+}
+function renderHB() {
+  const ul = $("#hb"); ul.replaceChildren();
+  Object.values(H).forEach(h => {
+    const li = document.createElement("li");
+    li.textContent = h.name + ": " + (h.X ? new Set(h.X.P.map(p => p.pg)).size + " pages loaded" : h.note + " ");
+    if (!h.X) {
+      const i = document.createElement("input"); i.type = "file"; i.setAttribute("aria-label", "Choose the " + h.name + " handbook (PDF)");
+      i.onchange = async e => {
+        const f = e.target.files[0]; if (!f) return;
+        h.note = "reading…"; renderHB();
+        try { await loadH(h, await f.arrayBuffer()); } catch (err) { h.note = "couldn't read it (" + err.message + ")"; }
+        renderHB();
+      };
+      li.append(i);
+    }
+    ul.append(li);
+  });
+}
+
+$("#home").replaceChildren(...HOSPITALS.map(c => new Option(c.name, c.id)));
+$("#home").value = home;
+$("#home").onchange = e => { home = e.target.value; try { localStorage.setItem("lablookup-home", home); } catch (_) {} if (last) run(last.q); };
+$("#f").onsubmit = e => { e.preventDefault(); const q = $("#q").value.trim(); if (q) run(q); };
+$("#pv").onclick = () => cur && view(cur.h, cur.n - 1);
+$("#nx").onclick = () => cur && view(cur.h, cur.n + 1);
+$("#copy").onclick = () => navigator.clipboard.writeText($("#refText").textContent);
+$("#mic").onclick = () => on ? stop() : start();
+if (PHONE) { $("#mic").textContent = "Tap to talk"; $("#status").textContent = "Tap the button, then say a test name."; }
+if (!SR) { $("#mic").disabled = true; $("#status").textContent = "Voice needs Chrome or Edge. You can still type a test name."; }
+
+renderHB();
+HOSPITALS.forEach(async c => {               // load every hospital's handbook automatically
+  const h = H[c.id];
+  try {
+    const r = await fetch(c.file, {cache: "no-cache"});
+    if (!r.ok) throw new Error("not found");
+    await loadH(h, await r.arrayBuffer());
+  } catch (err) { h.note = "not available yet (" + err.message + "). Choose its PDF:"; }
+  renderHB();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LabLookup handbook manager</title>
+<style>
+:root{--bg:#eef3f5;--card:#fff;--ink:#14262e;--mute:#5b6f78;--line:#cfdbe0;--acc:#1b6b7a;--hot:#c93c27}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1b20;--card:#172830;--ink:#e6f0f3;--mute:#8fa6af;--line:#274049;--acc:#4fb3c4;--hot:#ff7a5f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Trebuchet MS","Segoe UI",system-ui,sans-serif;padding:20px 14px;display:flex;justify-content:center}
+main{width:100%;max-width:820px}
+h1{margin:0 0 4px;font-size:1.7rem}
+fieldset{border:1px solid var(--line);border-radius:12px;background:var(--card);margin:14px 0;padding:12px 16px}
+legend{font-weight:700;color:var(--acc);padding:0 6px}
+label{display:block;margin:6px 0}
+input:not([type=checkbox]):not([type=file]){padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;width:100%;max-width:420px}
+button{font:inherit;cursor:pointer;padding:7px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+button.go{background:var(--acc);color:#fff;border:0;font-weight:700}
+ul{padding-left:1.1rem}li{margin:6px 0}code{color:var(--mute);word-break:break-all}
+.add{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
+.note{color:var(--mute);font-size:.92rem}
+:focus-visible{outline:3px solid var(--hot);outline-offset:2px}
+</style>
+</head>
+<body>
+<main>
+<h1>Handbook manager</h1>
+<p class="note">Add a new edition, choose which one is current, and remove old ones. Then download <b>handbooks.json</b> and upload it to your website. The LabLookup app reads that file every time it opens.</p>
+<p class="note">Already have a handbooks.json? <input type="file" id="open" aria-label="Open an existing handbooks.json"></p>
+
+<div id="list"></div>
+<p><button id="addH" type="button">+ Add a hospital</button> <button id="dl" type="button" class="go">Download handbooks.json</button></p>
+
+<h2>After you download</h2>
+<ol>
+  <li>Upload the new PDF to the <b>handbooks</b> folder on your website, using <b>exactly the file name shown</b> above (spaces become hyphens).</li>
+  <li>Upload the new <b>handbooks.json</b> next to the LabLookup page, replacing the old one.</li>
+  <li>Delete the removed editions’ PDFs from the <b>handbooks</b> folder. Removing an edition here only takes it off the list; the PDF stays on the website until you delete it.</li>
+  <li>Staff see the new edition the next time they open the app.</li>
+</ol>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const el = (t, p = {}, ...c) => { const e = Object.assign(document.createElement(t), p); e.append(...c); return e; };
+let data = {hospitals: [{id: "TI", name: "Hospital Teluk Intan", email: "", say: ["Teluk Intan"], current: "Draft 2.0",
+  versions: [{label: "Draft 2.0", file: "handbooks/Handbook_-_Draft__2_0.pdf"}]}]};
+
+function field(text, obj, key, hint) {
+  const i = el("input", {value: Array.isArray(obj[key]) ? obj[key].join(", ") : (obj[key] || ""), placeholder: hint || ""});
+  i.oninput = () => { obj[key] = key === "say" ? i.value.split(",").map(s => s.trim()).filter(Boolean) : i.value; };
+  return el("label", {}, text + " ", i);
+}
+
+function render() {
+  const box = $("#list"); box.replaceChildren();
+  data.hospitals.forEach((h, hi) => {
+    h.versions = h.versions || [];
+    const now = h.versions.some(v => v.label === h.current) ? h.current : (h.versions[0] ? h.versions[0].label : "");
+    const ul = el("ul");
+    h.versions.forEach((v, vi) => ul.append(el("li", {},
+      el("strong", {}, v.label), v.label === now ? " (current) " : " (older) ", el("code", {}, v.file), " ",
+      v.label === now ? "" : el("button", {type: "button", onclick: () => { h.current = v.label; render(); }}, "Make current"), " ",
+      el("button", {type: "button", onclick: () => {
+        if (!confirm("Remove “" + v.label + "” from the list? Delete its PDF from the website too.")) return;
+        h.versions.splice(vi, 1); if (h.current === v.label) h.current = ""; render();
+      }}, "Remove"))));
+    const label = el("input", {placeholder: "New edition name, e.g. Version 5.0 (2027)"});
+    const file = el("input", {type: "file", accept: ".pdf,application/pdf"});
+    const mk = el("input", {type: "checkbox", checked: true});
+    const add = el("button", {type: "button", className: "go", onclick: () => {
+      const name = label.value.trim(), f = file.files[0];
+      if (!name || !f) return alert("Type the edition name and choose its PDF.");
+      if (h.versions.some(v => v.label === name)) return alert("That edition name is already in the list.");
+      h.versions.unshift({label: name, file: "handbooks/" + f.name.replace(/\s+/g, "-")});
+      if (mk.checked || !h.current) h.current = name;
+      render();
+    }}, "Add this edition");
+    box.append(el("fieldset", {}, el("legend", {}, h.name || "New hospital"),
+      field("Short ID", h, "id", "e.g. TI"), field("Name", h, "name", "e.g. Hospital Teluk Intan"),
+      field("Email for referrals (optional)", h, "email"), field("Other names people say", h, "say", "separate with commas"),
+      el("strong", {}, "Editions"), ul.children.length ? ul : el("p", {className: "note"}, "No edition yet."),
+      el("div", {className: "add"}, label, " ", file, " ", el("label", {style: "display:inline"}, mk, " make it current "), " ", add),
+      el("p", {}, el("button", {type: "button", onclick: () => { if (confirm("Remove " + (h.name || "this hospital") + "?")) { data.hospitals.splice(hi, 1); render(); } }}, "Remove this hospital"))));
+  });
+}
+
+$("#addH").onclick = () => { data.hospitals.push({id: "", name: "", email: "", say: [], current: "", versions: []}); render(); };
+$("#open").onchange = async e => {
+  try {
+    const j = JSON.parse(await e.target.files[0].text());
+    if (!Array.isArray(j.hospitals)) throw 0;
+    data = j; render();
+  } catch (_) { alert("That doesn't look like a handbooks.json file."); }
+};
+$("#dl").onclick = () => {
+  const ids = data.hospitals.map(h => (h.id || "").trim());
+  if (data.hospitals.some(h => !h.id || !h.name)) return alert("Every hospital needs a short ID and a name.");
+  if (new Set(ids).size !== ids.length) return alert("Each hospital needs a different short ID.");
+  const out = {hospitals: data.hospitals.map(h => ({id: h.id.trim(), name: h.name.trim(), email: h.email || "", say: h.say || [],
+    current: h.versions.some(v => v.label === h.current) ? h.current : (h.versions[0] ? h.versions[0].label : ""), versions: h.versions}))};
+  const a = el("a", {href: URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], {type: "application/json"})), download: "handbooks.json"});
+  document.body.append(a); a.click(); a.remove();
+};
+fetch("handbooks.json", {cache: "no-cache"}).then(r => r.ok ? r.json() : null)
+  .then(j => { if (j && Array.isArray(j.hospitals)) data = j; render(); }).catch(render);
+</script>
+</body>
+</html>

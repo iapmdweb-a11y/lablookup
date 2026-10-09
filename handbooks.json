@@ -1,0 +1,19 @@
+{
+  "hospitals": [
+    {
+      "id": "TI",
+      "name": "Hospital Teluk Intan",
+      "email": "",
+      "say": [
+        "Teluk Intan"
+      ],
+      "current": "Draft 2.0",
+      "versions": [
+        {
+          "label": "Draft 2.0",
+          "file": "handbooks/Handbook_-_Draft__2_0.pdf"
+        }
+      ]
+    }
+  ]
+}
